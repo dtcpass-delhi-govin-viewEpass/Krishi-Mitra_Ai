@@ -5,7 +5,7 @@ import Icon from '../../components/common/Icon';
 
 // ── Backend base URL ──────────────────────────────────────────
 // Add VITE_API_URL=http://localhost:4000 to your frontend .env
-const API = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+const API = import.meta.env.VITE_API_URL || '';
 
 // ── Backend API helpers ───────────────────────────────────────
 /**

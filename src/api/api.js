@@ -1,5 +1,5 @@
 // src/api/api.js
-const BACKEND = "http://localhost:8000";
+const BACKEND = import.meta.env?.VITE_API_URL || "http://localhost:4000";
 const OWM_KEY = import.meta.env?.VITE_OPENWEATHER_API_KEY || "1d8718546f43e91b90fe914c96b6881e";
 const OWM_BASE = "https://api.openweathermap.org/data/2.5";
 

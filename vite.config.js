@@ -10,6 +10,10 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/mandi/, '/resource/35985678-0d79-46b4-9ed6-6f13308a1d24'),
       },
+      '/auth': {
+        target: 'http://localhost:4000',
+        changeOrigin: true,
+      },
     },
   },
 })

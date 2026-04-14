@@ -143,7 +143,23 @@ app.post('/chat', async (req, res) => {
     });
   }
 
-  if (!GEMINI_API_KEY) {
+  if (!['gemini', 'grok'].includes(CHATBOT_PROVIDER)) {
+    console.error('[chat] Unsupported chatbot provider:', CHATBOT_PROVIDER);
+    return res.status(500).json({
+      error: 'config_error',
+      error_description: 'Unsupported CHATBOT_PROVIDER. Use gemini or grok.'
+    });
+  }
+
+  if (CHATBOT_PROVIDER === 'grok' && !GROK_API_KEY) {
+    console.error('[chat] GROK_API_KEY not set on server.');
+    return res.status(500).json({
+      error: 'config_error',
+      error_description: 'Grok API key not configured on server.'
+    });
+  }
+
+  if (CHATBOT_PROVIDER === 'gemini' && !GEMINI_API_KEY) {
     console.error('[chat] GEMINI_API_KEY not set on server.');
     return res.status(500).json({
       error: 'config_error',
@@ -151,14 +167,16 @@ app.post('/chat', async (req, res) => {
     });
   }
 
-  const contents = [
-    {
-      role: 'user',
-      parts: [{ text: `You are KisanGPT, an expert AI assistant for Indian farmers. 
+  const systemPrompt = `You are KisanGPT, an expert AI assistant for Indian farmers. 
         Answer questions about crops, diseases, weather, mandi prices, farming techniques, 
         government schemes, and agriculture in simple Hindi or English, If asked ANYTHING unrelated (politics, movies, coding, general knowledge etc.), respond ONLY with: "Main sirf kheti-badi ke sawaalon ka jawab de sakta hoon. Koi fasal ya kisan se juda sawaal poochhein! 🌱
         LANGUAGE: Detect the language of the user's message and ALWAYS reply in that SAME language. If Hindi → reply in Hindi. If English → reply in English. If Marathi → reply in Marathi. If mixed → use the dominant language.
-        Be concise, practical and helpful.` }]
+        Be concise, practical and helpful.`;
+
+  const contents = [
+    {
+      role: 'user',
+      parts: [{ text: systemPrompt }]
     },
     { role: 'model', parts: [{ text: 'Namaste! Main KisanGPT hoon. Aapki khet aur fasal se related koi bhi sawaal poochh sakte hain!' }] },
     ...history,
@@ -168,22 +186,43 @@ app.post('/chat', async (req, res) => {
   try {
     const maxRetries = 1;
     let attempt = 0;
-    let geminiRes;
+    let providerRes;
 
     do {
-      geminiRes = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
-        {
+      if (CHATBOT_PROVIDER === 'grok') {
+        providerRes = await fetch('https://api.x.ai/v1/chat/completions', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contents }),
-        }
-      );
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${GROK_API_KEY}`,
+          },
+          body: JSON.stringify({
+            model: 'grok-1',
+            messages: [
+              { role: 'system', content: systemPrompt },
+              ...history.map(item => ({
+                role: item.role === 'user' ? 'user' : 'assistant',
+                content: item.parts?.[0]?.text || ''
+              })),
+              { role: 'user', content: message }
+            ],
+          }),
+        });
+      } else {
+        providerRes = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents }),
+          }
+        );
+      }
 
-      if (geminiRes.status === 429 && attempt < maxRetries) {
-        const retryHeader = geminiRes.headers.get('retry-after') || geminiRes.headers.get('Retry-After');
+      if (providerRes.status === 429 && attempt < maxRetries) {
+        const retryHeader = providerRes.headers.get('retry-after') || providerRes.headers.get('Retry-After');
         const retryAfterSeconds = Number(retryHeader) || 1;
-        console.warn(`[chat] Gemini rate limited. retryAfter=${retryAfterSeconds}s attempt=${attempt + 1}`);
+        console.warn(`[chat] ${CHATBOT_PROVIDER} rate limited. retryAfter=${retryAfterSeconds}s attempt=${attempt + 1}`);
         await sleep(retryAfterSeconds * 1000);
       } else {
         break;
@@ -192,8 +231,8 @@ app.post('/chat', async (req, res) => {
       attempt += 1;
     } while (attempt <= maxRetries);
 
-    if (geminiRes.status === 429) {
-      const retryHeader = geminiRes.headers.get('retry-after') || geminiRes.headers.get('Retry-After');
+    if (providerRes.status === 429) {
+      const retryHeader = providerRes.headers.get('retry-after') || providerRes.headers.get('Retry-After');
       const retryAfterSeconds = Number(retryHeader) || 1;
       return res.status(429).json({
         error: 'rate_limited',
@@ -202,17 +241,19 @@ app.post('/chat', async (req, res) => {
       });
     }
 
-    if (!geminiRes.ok) {
-      const errData = await geminiRes.json();
-      console.error('[chat] Gemini error:', errData);
-      return res.status(geminiRes.status).json({
-        error: 'gemini_error',
-        error_description: errData?.error?.message || 'Gemini request failed.'
+    if (!providerRes.ok) {
+      const errData = await providerRes.json();
+      console.error('[chat] provider error:', errData);
+      return res.status(providerRes.status).json({
+        error: 'provider_error',
+        error_description: errData?.error?.message || 'Chat provider request failed.'
       });
     }
 
-    const data = await geminiRes.json();
-    const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text || 'Sorry, no response generated.';
+    const data = await providerRes.json();
+    const reply = CHATBOT_PROVIDER === 'grok'
+      ? data?.choices?.[0]?.message?.content || 'Sorry, no response generated.'
+      : data?.candidates?.[0]?.content?.parts?.[0]?.text || 'Sorry, no response generated.';
 
     return res.json({ ok: true, reply });
 
@@ -220,7 +261,7 @@ app.post('/chat', async (req, res) => {
     console.error('[chat] Unexpected error:', err);
     return res.status(500).json({
       error: 'server_error',
-      error_description: 'Chat request failed.'
+      error_description: 'An unexpected error occurred while contacting the chat provider.'
     });
   }
 });

@@ -830,11 +830,16 @@ VITE_HF_API_KEY=hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 VITE_WEATHER_API_KEY=your_openweathermap_key_here
 
 # ── AI Chatbot ─────────────────────────────────────────────────────────────
-# API key for your LLM provider (Google Gemini / OpenAI / Groq)
-VITE_CHATBOT_API_KEY=your_llm_api_key_here
+# Frontend only: base URL for the backend API
+VITE_API_URL=http://localhost:4000
+
+# Backend only: choose your LLM provider and key
+CHATBOT_PROVIDER=grok
+GEMINI_API_KEY=your_gemini_api_key_here
+GROK_API_KEY=your_grok_api_key_here
 ```
 
-> ⚠️ **All variables must be prefixed with `VITE_`** — this is Vite's security requirement for exposing environment variables to the browser bundle. Any variable without the prefix will be `undefined` at runtime.
+> ⚠️ **VITE_ variables are only exposed to the frontend bundle.** Backend-only secrets like `GEMINI_API_KEY` and `GROK_API_KEY` should be set directly in the server environment (Render, local shell, or a server-side config file).
 
 <br/>
 

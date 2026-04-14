@@ -1,74 +1,51 @@
 // src/pages/Disease/DiseaseDetection.jsx
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Client } from "@gradio/client";
+import Card from '../../components/common/Card';
+import Btn from '../../components/common/Button';
+import Icon from '../../components/common/Icon';
 import UploadBox from './UploadBox';
 import DiagnosisResult from './DiagnosisResult';
-import './DiseaseDetection.css';
+import { theme } from '../../styles/theme';
 
 const DiseaseDetection = () => {
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [previewUrl, setPreviewUrl] = useState(null);
-  const [fileName, setFileName] = useState('');
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [results, setResults] = useState(null);
-  const [error, setError] = useState(null);
-  const [dragOver, setDragOver] = useState(false);
+  const [drag, setDrag] = useState(false);
+  const [clientReady, setClientReady] = useState(false);
+  const [clientError, setClientError] = useState(false); // ← safe addition from File 2 pattern
+  const fileRef = useRef();
+  const clientRef = useRef(null);
 
-  const fileInputRef = useRef(null);
-  const resultsRef = useRef(null);
+  // ── Connect once on mount (File 1 approach — faster, no reconnect per analyze) ──
+  useEffect(() => {
+    Client.connect("sanjaychaurasia1/krishimitra-ai", {
+      hf_token: import.meta.env.VITE_HF_TOKEN,
+    })
+      .then((c) => {
+        clientRef.current = c;
+        setClientReady(true);
+      })
+      .catch((err) => {
+        console.error("Failed to connect to model:", err);
+        setClientError(true); // ← shows error badge instead of infinite "Connecting..."
+      });
+  }, []);
 
-  const handleFile = (file) => {
-    if (!file || !file.type.startsWith('image/')) {
-      setError('Please upload a valid image file (JPG, PNG, WEBP)');
+  // ── File handler with validation (safe addition from File 2) ──
+  const handleFile = (f) => {
+    if (!f) return;
+    if (!f.type.startsWith('image/')) {
+      setResult({ error: 'Please upload a valid image file (JPG, PNG, WEBP)' });
       return;
     }
-
-    setSelectedFile(file);
-    setFileName(file.name);
-    setError(null);
-    setResults(null);
-
+    setFile(f);
+    setResult(null);
     const reader = new FileReader();
-    reader.onload = (e) => {
-      setPreviewUrl(e.target.result);
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const handleBrowseClick = () => {
-    fileInputRef.current.click();
-  };
-
-  const handleFileInputChange = (e) => {
-    if (e.target.files && e.target.files[0]) {
-      handleFile(e.target.files[0]);
-    }
-  };
-
-  const handleDragOver = (e) => {
-    e.preventDefault();
-    setDragOver(true);
-  };
-
-  const handleDragLeave = () => {
-    setDragOver(false);
-  };
-
-  const handleDrop = (e) => {
-    e.preventDefault();
-    setDragOver(false);
-    const file = e.dataTransfer.files[0];
-    if (file && file.type.startsWith('image/')) {
-      handleFile(file);
-    } else {
-      setError('Please drop a valid image file');
-    }
-  };
-
-  const extractConfidence = (confidenceObj) => {
-    if (!confidenceObj || typeof confidenceObj !== "object") return 0;
-    const values = Object.values(confidenceObj);
-    return Math.max(...values) / 100;
+    reader.onload = (e) => setPreview(e.target.result);
+    reader.readAsDataURL(f);
   };
 
   const formatDiseaseName = (name) => {
@@ -79,254 +56,224 @@ const DiseaseDetection = () => {
       .join(' ');
   };
 
-  const analyzeImage = async () => {
-    if (!selectedFile) return;
+  const extractConfidence = (confidenceObj) => {
+    if (!confidenceObj || typeof confidenceObj !== 'object') return 0;
+    return Math.max(...Object.values(confidenceObj)) / 100;
+  };
 
+  const getSeverityLevel = (confidence) => {
+    if (confidence > 0.85) return 'Critical';
+    if (confidence > 0.7)  return 'High';
+    if (confidence > 0.5)  return 'Moderate';
+    return 'Low';
+  };
+
+  const parseMarkdownResponse = (raw) => {
+    const get = (key) => {
+      const rx = new RegExp(`\\*\\*${key}:\\*\\*\\s*([^*\n]+)`, 'i');
+      const m = raw.match(rx);
+      return m ? m[1].trim() : null;
+    };
+
+    const getSection = (key) => {
+      const rx = new RegExp(`###\\s*${key}([\\s\\S]*?)(?=###|$)`, 'i');
+      const m = raw.match(rx);
+      if (!m) return [];
+      return m[1]
+        .split('\n')
+        .map(l => l.replace(/^[-•]\s*/, '').trim())
+        .filter(Boolean);
+    };
+
+    // ← Safe fallback added: tries get('disease') if heading parse fails
+    const diseaseName =
+      raw.split('**')[0].replace(/^#+\s*/, '').trim() ||
+      get('disease') ||
+      'Unknown';
+
+    return {
+      disease:     formatDiseaseName(diseaseName),
+      plant:       get('plant'),
+      severity:    get('severity'),
+      description: getSection('description').join(' '),
+      symptoms:    getSection('symptoms'),
+      treatment:   getSection('treatment'),
+      prevention:  getSection('prevention'),
+    };
+  };
+
+  const detect = async () => {
+    if (!file || !clientRef.current) return;
     setLoading(true);
-    setError(null);
-    setResults(null);
+    setResult(null);
 
     try {
-      const client = await Client.connect(
-        "sanjaychaurasia1/krishimitra-ai",
-        {
-          hf_token: import.meta.env.VITE_HF_TOKEN,
-        }
-      );
-
-      const result = await client.predict("/predict", {
-        image: selectedFile,
+      const response = await clientRef.current.predict("/predict", {
+        image: file,
       });
 
-      console.log('API Response:', result.data);
+      console.log('API Response:', response.data);
 
-      const [diagnosis, alternatives, confidenceData] = result.data;
-      
-      // Parse alternatives if they exist
-      let parsedAlternatives = [];
-      if (alternatives && typeof alternatives === 'object') {
-        parsedAlternatives = Object.entries(alternatives)
-          .map(([name, conf]) => ({
-            name: formatDiseaseName(name),
-            confidence: (conf / 100).toFixed(2)
-          }))
-          .sort((a, b) => b.confidence - a.confidence)
-          .slice(0, 3);
-      }
+      const [diagnosis, alternatives, confidenceData] = response.data;
 
-      const parsedResult = {
-        disease: formatDiseaseName(diagnosis),
-        solution: alternatives?.treatment || alternatives?.solution || 
-          'Regular monitoring and proper plant care recommended',
-        confidence: extractConfidence(confidenceData),
-        alternatives: parsedAlternatives,
-        severity: getSeverityLevel(extractConfidence(confidenceData)),
-      };
+      const parsed = parseMarkdownResponse(diagnosis);
+      const confidence = extractConfidence(confidenceData);
 
-      setResults(parsedResult);
-
-      setTimeout(() => {
-        if (resultsRef.current) {
-          resultsRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-      }, 100);
+      setResult({
+        ...parsed,
+        confidence,
+        severity: parsed.severity
+          ? parsed.severity.charAt(0).toUpperCase() + parsed.severity.slice(1).toLowerCase()
+          : getSeverityLevel(confidence),
+        alternatives: (() => {
+          if (!alternatives || typeof alternatives !== 'object') return [];
+          return Object.entries(alternatives)
+            .map(([name, conf]) => ({
+              name: formatDiseaseName(name),
+              confidence: (conf / 100).toFixed(2),
+            }))
+            .sort((a, b) => b.confidence - a.confidence)
+            .slice(0, 3);
+        })(),
+      });
 
     } catch (err) {
       console.error('Analysis error:', err);
-      setError(err.message || "Failed to analyze image. Please try again.");
+      setResult({ error: err.message || "Failed to analyze image. Please try again." });
     } finally {
       setLoading(false);
     }
   };
 
-  const getSeverityLevel = (confidence) => {
-    if (confidence > 0.85) return 'high';
-    if (confidence > 0.7) return 'moderate';
-    if (confidence > 0.5) return 'low';
-    return 'none';
-  };
-
-  const clearImage = () => {
-    setSelectedFile(null);
-    setPreviewUrl(null);
-    setFileName('');
-    setResults(null);
-    setError(null);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-  };
-
   return (
-    <div className="disease-detection">
-      {/* Animated Background */}
-      <div className="bg-animation">
-        <div className="bg-leaf leaf-1">🌿</div>
-        <div className="bg-leaf leaf-2">🍃</div>
-        <div className="bg-leaf leaf-3">🌱</div>
-        <div className="bg-leaf leaf-4">🍂</div>
-      </div>
+    <div>
 
-      <div className="wrapper">
-        {/* Header */}
-        <header className="header">
-          <div className="logo">
-            <div className="logo-icon">🌾</div>
-            <div className="logo-text">
-              <h1>KrishiMitra</h1>
-              <span>AI-Powered Plant Health Assistant</span>
-            </div>
-          </div>
-          <div className="model-badge">
-            <span className="badge-dot"></span>
-            ResNet50 · 38 Classes
-          </div>
-        </header>
+      {/* ── Top bar: badges + stats ── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24, flexWrap: "wrap" }}>
 
-        {/* Hero Section */}
-        <div className="hero-section">
-          <div className="hero-content">
-            <div className="hero-eyebrow">
-              <span className="eyebrow-icon"></span>
-              Powered by Deep Learning
-            </div>
-            <h2>
-              Detect Plant Diseases<br />
-              <span className="highlight">Instantly & Accurately</span>
-            </h2>
-            <p>
-              Upload a photo of your plant's leaf. Our advanced ResNet50 model, 
-              trained on 87,000+ images, provides instant diagnosis and 
-              organic treatment recommendations.
-            </p>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+          {/* ResNet50 badge */}
+          <div style={{
+            display: "inline-flex", alignItems: "center", gap: 5,
+            fontSize: 12.5, fontWeight: 500, color: "#1A4D2E",
+            background: "#e8f5e9", border: "0.5px solid rgba(45,122,63,0.35)",
+            borderRadius: 20, padding: "4px 10px",
+          }}>
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#2D7A3F", display: "inline-block" }} />
+            ResNet50 · 38 classes
           </div>
 
-          {/* Stats Grid */}
-          <div className="stats-grid">
-            <div className="stat-card">
-              <div className="stat-number">38</div>
-              <div className="stat-label">Disease Classes</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-number">95%</div>
-              <div className="stat-label">Accuracy</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-number">14</div>
-              <div className="stat-label">Crop Types</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-number">87k+</div>
-              <div className="stat-label">Training Images</div>
-            </div>
+          {/* Model ready / connecting / error badge */}
+          <div style={{
+            display: "inline-flex", alignItems: "center", gap: 5,
+            fontSize: 12.5, fontWeight: 500,
+            color: clientError ? "#E24B4A" : clientReady ? "#2D7A3F" : theme.mist,
+            background: clientError ? "rgba(226,75,74,0.08)" : clientReady ? "rgba(45,122,63,0.08)" : `${theme.earth}11`,
+            border: `0.5px solid ${clientError ? "rgba(226,75,74,0.35)" : clientReady ? "rgba(45,122,63,0.35)" : theme.earth + "44"}`,
+            borderRadius: 20, padding: "4px 10px",
+            opacity: clientReady ? 1 : 0.7,
+            transition: "all 0.3s ease",
+          }}>
+            <span style={{
+              width: 6, height: 6, borderRadius: "50%",
+              background: clientError ? "#E24B4A" : clientReady ? "#2D7A3F" : "#aaa",
+              display: "inline-block",
+            }} />
+            {clientError ? "Model unavailable" : clientReady ? "Model ready" : "Connecting..."}
           </div>
         </div>
 
-        {/* Upload Section */}
-        <div className="upload-section">
-          <div className="upload-container">
-            <div className="upload-header">
-              <h3>Upload Plant Image</h3>
-              <p>Supported formats: JPG, PNG, WEBP (Max 10MB)</p>
-            </div>
-            
-            <div className="upload-area">
-              <UploadBox
-                drag={dragOver}
-                setDrag={setDragOver}
-                preview={previewUrl}
-                handleFile={handleFile}
-                fileRef={fileInputRef}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDrop={handleDrop}
-              />
-              
-              {previewUrl && (
-                <div className="preview-container">
-                  <div className="preview-image">
-                    <img src={previewUrl} alt="Plant preview" />
-                    <button className="clear-btn" onClick={clearImage} title="Remove image">
-                      ✕
-                    </button>
-                  </div>
-                  <div className="preview-info">
-                    <span className="file-name">{fileName}</span>
-                    <span className="file-size">
-                      {(selectedFile?.size / 1024 / 1024).toFixed(2)} MB
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
+        {/* Divider */}
+        <div style={{ width: 1, height: 28, background: `${theme.earth}44`, flexShrink: 0 }} />
 
-            {selectedFile && (
-              <button
-                className={`analyze-btn ${loading ? 'loading' : ''}`}
-                onClick={analyzeImage}
-                disabled={loading}
-              >
-                {loading ? (
-                  <>
-                    <span className="spinner"></span>
-                    Analyzing Plant Health...
-                  </>
-                ) : (
-                  <>
-                    <span className="btn-icon">🔬</span>
-                    Analyze Plant Health
-                  </>
-                )}
-              </button>
+        {/* Stats */}
+        <div style={{ display: "flex", gap: 8, flex: 1 }}>
+          {[
+            { num: "38",   label: "Disease classes" },
+            { num: "95%",  label: "Accuracy" },
+            { num: "14",   label: "Crop types" },
+            { num: "87k+", label: "Training images" },
+          ].map(({ num, label }) => (
+            <div key={label} style={{
+              background: `${theme.earth}22`,
+              borderRadius: 8,
+              padding: "6px 12px",
+              textAlign: "center",
+              border: `1.5px solid ${theme.earth}44`,
+              flex: 1,
+            }}>
+              <div style={{ fontSize: 20, fontWeight: 700, color: "#2D7A3F", lineHeight: 1.1 }}>{num}</div>
+              <div style={{ fontSize: 10, color: theme.mist, marginTop: 2, whiteSpace: "nowrap" }}>{label}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Main two-column layout ── */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+        <div>
+          <h2 style={{ color: theme.wheat, fontFamily: "'Playfair Display', serif", fontSize: 28, marginBottom: 8, marginTop: 0 }}>
+            Plant Disease Detection
+          </h2>
+          <p style={{ color: theme.mist, marginBottom: 24, opacity: 0.8, fontSize: 14 }}>
+            Upload a photo of your plant leaf. Our Keras AI model will analyze and diagnose diseases instantly.
+          </p>
+
+          <UploadBox
+            drag={drag}
+            setDrag={setDrag}
+            preview={preview}
+            handleFile={handleFile}
+            fileRef={fileRef}
+          />
+
+          {/* ← File size info shown after upload (safe addition from File 2) */}
+          {file && (
+            <p style={{ color: theme.mist, fontSize: 11, opacity: 0.5, marginTop: 6, marginBottom: 0 }}>
+              {file.name} · {(file.size / 1024 / 1024).toFixed(2)} MB
+            </p>
+          )}
+
+          <div style={{ display: "flex", gap: 12, marginTop: 16 }}>
+            <Btn
+              icon="camera"
+              onClick={detect}
+              loading={loading}
+              disabled={!file || !clientReady || clientError}
+              style={{ background: `linear-gradient(135deg, #1A4D2E, #2D7A3F)` }}
+            >
+              {loading ? "Analyzing..." : "Analyze Plant"}
+            </Btn>
+            {preview && (
+              <Btn variant="ghost" onClick={() => { setFile(null); setPreview(null); setResult(null); }}>
+                Clear
+              </Btn>
             )}
           </div>
         </div>
 
-        {/* Loading Animation */}
-        {loading && (
-          <div className="loading-overlay">
-            <div className="loading-content">
-              <div className="loading-spinner">
-                <div className="spinner-ring"></div>
-                <div className="spinner-leaf">🌿</div>
+        <div style={{ marginTop: result ? 40 : 0 }}>
+          {!result ? (
+            <Card style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 16 }}>
+              <div style={{ padding: 24, borderRadius: "50%", background: `${theme.earth}33` }}>
+                <Icon name="leaf" size={40} color={theme.clay} />
               </div>
-              <p>Analyzing your plant image...</p>
-              <p className="loading-sub">Our AI is examining disease patterns</p>
-            </div>
-          </div>
-        )}
-
-        {/* Results Section */}
-        <div ref={resultsRef} className={`results-section ${results || error ? 'show' : ''}`}>
-          {error && (
-            <div className="error-card">
-              <div className="error-icon"></div>
-              <div className="error-content">
-                <h4>Analysis Failed</h4>
-                <p>{error}</p>
-                <button className="retry-btn" onClick={() => setError(null)}>
-                  Dismiss
-                </button>
-              </div>
-            </div>
-          )}
-          
-          {results && (
-            <DiagnosisResult result={results} />
+              <p style={{ color: theme.mist, opacity: 0.6, textAlign: "center" }}>
+                Upload a plant image to see<br />AI diagnosis results here
+              </p>
+            </Card>
+          ) : result.error ? (
+            <Card>
+              <p style={{ color: "#E24B4A", marginBottom: 0, fontSize: 13 }}>{result.error}</p>
+            </Card>
+          ) : (
+            <Card>
+              <DiagnosisResult result={result} />
+            </Card>
           )}
         </div>
-
-        {/* Footer */}
-        <footer className="footer">
-          <div className="footer-content">
-            <p>Built to help farmers and gardeners</p>
-            <p className="footer-note">
-              <strong>KrishiMitra AI</strong> · ResNet50 Plant Disease Detection · 
-              For educational purposes only. Consult local experts for critical decisions.
-            </p>
-          </div>
-        </footer>
       </div>
+
     </div>
   );
 };

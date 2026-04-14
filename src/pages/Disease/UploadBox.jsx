@@ -8,6 +8,7 @@ const UploadBox = ({ drag, setDrag, preview, handleFile, fileRef }) => {
 
   const handleDrop = (e) => {
     e.preventDefault();
+    e.stopPropagation();
     setDrag(false);
     if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
   };
@@ -15,7 +16,10 @@ const UploadBox = ({ drag, setDrag, preview, handleFile, fileRef }) => {
   return (
     <div
       onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
-      onDragLeave={() => setDrag(false)}
+      onDragLeave={(e) => {
+        // Only reset when cursor truly leaves the box, not when entering a child element
+        if (!e.currentTarget.contains(e.relatedTarget)) setDrag(false);
+      }}
       onDrop={handleDrop}
       onClick={() => (fileRef || localFileRef).current.click()}
       style={{
@@ -35,7 +39,11 @@ const UploadBox = ({ drag, setDrag, preview, handleFile, fileRef }) => {
       }}
     >
       {preview ? (
-        <img src={preview} alt="Leaf" style={{ width: "100%", height: 260, objectFit: "cover", borderRadius: 14 }} />
+        <img
+          src={preview}
+          alt="Leaf"
+          style={{ width: "100%", height: 260, objectFit: "cover", borderRadius: 14 }}
+        />
       ) : (
         <>
           <div style={{ padding: 20, borderRadius: "50%", background: `${theme.leaf}22` }}>

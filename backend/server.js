@@ -12,6 +12,8 @@ const AUTH0_DOMAIN    = process.env.AUTH0_DOMAIN    || "dev-zl6sofbd5sbrdbde.us.
 const AUTH0_CLIENT_ID = process.env.AUTH0_CLIENT_ID || "yXHFS5b5pvSMFfeu76iCUJCW7kM5ffwH";
 const GEMINI_API_KEY  = process.env.GEMINI_API_KEY;
 
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 // ── Middleware ────────────────────────────────────
 app.use(express.json());
 app.use(cors({
@@ -164,19 +166,39 @@ app.post('/chat', async (req, res) => {
   ];
 
   try {
-    const geminiRes = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents }),
+    const maxRetries = 1;
+    let attempt = 0;
+    let geminiRes;
+
+    do {
+      geminiRes = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents }),
+        }
+      );
+
+      if (geminiRes.status === 429 && attempt < maxRetries) {
+        const retryHeader = geminiRes.headers.get('retry-after') || geminiRes.headers.get('Retry-After');
+        const retryAfterSeconds = Number(retryHeader) || 1;
+        console.warn(`[chat] Gemini rate limited. retryAfter=${retryAfterSeconds}s attempt=${attempt + 1}`);
+        await sleep(retryAfterSeconds * 1000);
+      } else {
+        break;
       }
-    );
+
+      attempt += 1;
+    } while (attempt <= maxRetries);
 
     if (geminiRes.status === 429) {
+      const retryHeader = geminiRes.headers.get('retry-after') || geminiRes.headers.get('Retry-After');
+      const retryAfterSeconds = Number(retryHeader) || 1;
       return res.status(429).json({
         error: 'rate_limited',
-        error_description: 'Too many requests. Please wait a moment and try again.'
+        error_description: 'Too many requests. Please wait a moment and try again.',
+        retry_after_seconds: retryAfterSeconds,
       });
     }
 

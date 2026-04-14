@@ -29,7 +29,11 @@ export const sendKisanMessage = async (userMessage, history = []) => {
   const data = await res.json();
 
   if (!res.ok) {
-    if (res.status === 429) throw new Error('Rate limit reached. Please wait a moment and try again.');
+    if (res.status === 429) {
+      const wait = data?.retry_after_seconds;
+      const waitMessage = wait ? ` Please wait ${wait} second${wait === 1 ? '' : 's'} and try again.` : '';
+      throw new Error(`Rate limit reached.${waitMessage}`);
+    }
     if (res.status === 400) throw new Error('Invalid request to Gemini API.');
     if (res.status === 403) throw new Error('Invalid or expired Gemini API key.');
     throw new Error(data?.error_description || `Error ${res.status}`);

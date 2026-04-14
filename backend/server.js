@@ -5,11 +5,12 @@ import cors from 'cors';
 import fetch from 'node-fetch';
 
 const app = express();
-const PORT = 4000;
+const PORT = process.env.PORT || 4000;
 
-// 🔥 HARDCODED (for now - debugging)
-const AUTH0_DOMAIN = "dev-zl6sofbd5sbrdbde.us.auth0.com";
-const AUTH0_CLIENT_ID = "yXHFS5b5pvSMFfeu76iCUJCW7kM5ffwH";
+// Config — use env vars on Render, fallback for local dev
+const AUTH0_DOMAIN    = process.env.AUTH0_DOMAIN    || "dev-zl6sofbd5sbrdbde.us.auth0.com";
+const AUTH0_CLIENT_ID = process.env.AUTH0_CLIENT_ID || "yXHFS5b5pvSMFfeu76iCUJCW7kM5ffwH";
+const GEMINI_API_KEY  = process.env.GEMINI_API_KEY;
 
 // ── Middleware ────────────────────────────────────
 app.use(express.json());
@@ -50,7 +51,6 @@ app.post('/auth/send-otp', async (req, res) => {
     );
 
     const data = await auth0Res.json();
-
     console.log("🔍 Auth0 response:", data);
 
     if (!auth0Res.ok) {
@@ -58,10 +58,7 @@ app.post('/auth/send-otp', async (req, res) => {
       return res.status(auth0Res.status).json(data);
     }
 
-    return res.json({
-      ok: true,
-      message: 'OTP sent successfully'
-    });
+    return res.json({ ok: true, message: 'OTP sent successfully' });
 
   } catch (err) {
     console.error('[send-otp] Unexpected error:', err);
@@ -103,7 +100,6 @@ app.post('/auth/verify-otp', async (req, res) => {
     );
 
     const data = await auth0Res.json();
-
     console.log("🔍 Verify response:", data);
 
     if (!auth0Res.ok) {
@@ -111,7 +107,6 @@ app.post('/auth/verify-otp', async (req, res) => {
       return res.status(auth0Res.status).json(data);
     }
 
-    // Decode user info
     const [, payloadB64] = data.id_token.split('.');
     const profile = JSON.parse(
       Buffer.from(payloadB64, 'base64url').toString('utf8')
@@ -131,6 +126,78 @@ app.post('/auth/verify-otp', async (req, res) => {
     return res.status(500).json({
       error: 'server_error',
       error_description: 'OTP verification failed'
+    });
+  }
+});
+
+// ── GEMINI CHAT ───────────────────────────────────
+app.post('/chat', async (req, res) => {
+  const { message, history = [] } = req.body;
+
+  if (!message) {
+    return res.status(400).json({
+      error: 'invalid_input',
+      error_description: 'Message is required.'
+    });
+  }
+
+  if (!GEMINI_API_KEY) {
+    console.error('[chat] GEMINI_API_KEY not set on server.');
+    return res.status(500).json({
+      error: 'config_error',
+      error_description: 'Gemini API key not configured on server.'
+    });
+  }
+
+  const contents = [
+    {
+      role: 'user',
+      parts: [{ text: `You are KisanGPT, an expert AI assistant for Indian farmers. 
+        Answer questions about crops, diseases, weather, mandi prices, farming techniques, 
+        government schemes, and agriculture in simple Hindi or English. 
+        Be concise, practical and helpful.` }]
+    },
+    { role: 'model', parts: [{ text: 'Namaste! Main KisanGPT hoon. Aapki khet aur fasal se related koi bhi sawaal poochh sakte hain!' }] },
+    ...history,
+    { role: 'user', parts: [{ text: message }] }
+  ];
+
+  try {
+    const geminiRes = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents }),
+      }
+    );
+
+    if (geminiRes.status === 429) {
+      return res.status(429).json({
+        error: 'rate_limited',
+        error_description: 'Too many requests. Please wait a moment and try again.'
+      });
+    }
+
+    if (!geminiRes.ok) {
+      const errData = await geminiRes.json();
+      console.error('[chat] Gemini error:', errData);
+      return res.status(geminiRes.status).json({
+        error: 'gemini_error',
+        error_description: errData?.error?.message || 'Gemini request failed.'
+      });
+    }
+
+    const data = await geminiRes.json();
+    const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text || 'Sorry, no response generated.';
+
+    return res.json({ ok: true, reply });
+
+  } catch (err) {
+    console.error('[chat] Unexpected error:', err);
+    return res.status(500).json({
+      error: 'server_error',
+      error_description: 'Chat request failed.'
     });
   }
 });

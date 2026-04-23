@@ -1,0 +1,8 @@
+[33mcommit 11db4d49e407b5a2456ae00cf20c16c44bd34b5e[m
+Author: dtcpass-delhi-govin-viewEpass <vishalkumaraugust2002@gmail.com>
+Date:   Thu Apr 23 12:19:11 2026 +0000
+
+    new update
+
+ .env.example | 2 [32m+[m[31m-[m
+ 1 file changed, 1 insertion(+), 1 deletion(-)

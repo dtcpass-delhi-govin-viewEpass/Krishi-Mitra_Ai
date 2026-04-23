@@ -304,7 +304,9 @@ const Chatbot = () => {
   ]);
   const [input, setInput]         = useState('');
   const [loading, setLoading]     = useState(false);
-  const [voiceLang, setVoiceLang] = useState('hi-IN');
+  const [voiceLang, setVoiceLang] = useState(
+    navigator.language?.startsWith('hi') ? 'hi-IN' : 'en-IN'
+  );
   const bottomRef                 = useRef();
   const inputRef                  = useRef();
 

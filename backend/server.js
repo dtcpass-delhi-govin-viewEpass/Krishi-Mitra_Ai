@@ -1,4 +1,4 @@
-// server.js (FINAL WORKING VERSION)
+// server.js
 
 import express from 'express';
 import cors from 'cors';
@@ -7,10 +7,10 @@ import fetch from 'node-fetch';
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-// Config — use env vars on Render, fallback for local dev
+// ── Config ────────────────────────────────────────
 const AUTH0_DOMAIN    = process.env.AUTH0_DOMAIN    || "dev-zl6sofbd5sbrdbde.us.auth0.com";
 const AUTH0_CLIENT_ID = process.env.AUTH0_CLIENT_ID || "yXHFS5b5pvSMFfeu76iCUJCW7kM5ffwH";
-const GEMINI_API_KEY  = process.env.GEMINI_API_KEY;
+const GROQ_API_KEY    = process.env.GROQ_API_KEY;
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -132,7 +132,7 @@ app.post('/auth/verify-otp', async (req, res) => {
   }
 });
 
-// ── GEMINI CHAT ───────────────────────────────────
+// ── GROQ CHAT ─────────────────────────────────────
 app.post('/chat', async (req, res) => {
   const { message, history = [] } = req.body;
 
@@ -143,117 +143,96 @@ app.post('/chat', async (req, res) => {
     });
   }
 
-  if (!['gemini', 'grok'].includes(CHATBOT_PROVIDER)) {
-    console.error('[chat] Unsupported chatbot provider:', CHATBOT_PROVIDER);
+  if (!GROQ_API_KEY) {
+    console.error('[chat] GROQ_API_KEY not set on server.');
     return res.status(500).json({
       error: 'config_error',
-      error_description: 'Unsupported CHATBOT_PROVIDER. Use gemini or grok.'
+      error_description: 'Groq API key not configured on server.'
     });
   }
 
-  if (CHATBOT_PROVIDER === 'grok' && !GROK_API_KEY) {
-    console.error('[chat] GROK_API_KEY not set on server.');
-    return res.status(500).json({
-      error: 'config_error',
-      error_description: 'Grok API key not configured on server.'
-    });
-  }
+  const SYSTEM_PROMPT = `You are KisanGPT, an expert AI farming assistant built into कृषि Mitra — an AI farm manager app for Indian farmers.
 
-  if (CHATBOT_PROVIDER === 'gemini' && !GEMINI_API_KEY) {
-    console.error('[chat] GEMINI_API_KEY not set on server.');
-    return res.status(500).json({
-      error: 'config_error',
-      error_description: 'Gemini API key not configured on server.'
-    });
-  }
+YOUR ROLE:
+You are a knowledgeable agricultural advisor who helps Indian farmers with practical, actionable advice.
 
-  const systemPrompt = `You are KisanGPT, an expert AI assistant for Indian farmers. 
-        Answer questions about crops, diseases, weather, mandi prices, farming techniques, 
-        government schemes, and agriculture in simple Hindi or English, If asked ANYTHING unrelated (politics, movies, coding, general knowledge etc.), respond ONLY with: "Main sirf kheti-badi ke sawaalon ka jawab de sakta hoon. Koi fasal ya kisan se juda sawaal poochhein! 🌱
-        LANGUAGE: Detect the language of the user's message and ALWAYS reply in that SAME language. If Hindi → reply in Hindi. If English → reply in English. If Marathi → reply in Marathi. If mixed → use the dominant language.
-        Be concise, practical and helpful.`;
+STRICT RULES:
+1. ONLY answer questions related to: crops, farming, soil health, fertilizers, pesticides, crop diseases, weather impact on farming, irrigation, seeds, harvesting, post-harvest, government agricultural schemes (PM-KISAN, eNAM, Soil Health Card, PMFBY insurance, Kisan Credit Card), mandi prices, organic farming, or any agriculture-related topic.
+2. If asked ANYTHING unrelated (politics, movies, coding, general knowledge etc.), respond ONLY with: "Main sirf kheti-badi ke sawaalon ka jawab de sakta hoon. Koi fasal ya kisan se juda sawaal poochhein! 🌱"
+3. LANGUAGE: Detect the language of the user's message and ALWAYS reply in that SAME language. If Hindi → reply in Hindi. If English → reply in English. If Marathi → reply in Marathi. If mixed → use the dominant language.
+4. SPECIFICITY: Always give exact, actionable advice. Include specific chemical names with doses (e.g., "Mancozeb 75% WP @ 2g per litre of water"), timing, frequency. Never give vague answers.
+5. INDIAN CONTEXT: Always refer to Indian varieties, Indian government schemes, Indian market context. Mention KVK (Krishi Vigyan Kendra), state agriculture departments, ICAR when relevant.
+6. FORMAT: Use short paragraphs or bullet points. Keep responses clear and readable on mobile. Do not use markdown headers (##). Use emoji sparingly — only 🌱 🌾 💧 ⚠️ ✅ where genuinely helpful.
+7. SAFETY: Never recommend anything that could harm the farmer, environment, or violate Indian law.`;
 
-  const contents = [
-    {
-      role: 'user',
-      parts: [{ text: systemPrompt }]
-    },
-    { role: 'model', parts: [{ text: 'Namaste! Main KisanGPT hoon. Aapki khet aur fasal se related koi bhi sawaal poochh sakte hain!' }] },
-    ...history,
-    { role: 'user', parts: [{ text: message }] }
+  const messages = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    ...history.map(m => ({
+      role: m.role === 'user' ? 'user' : 'assistant',
+      content: m.parts?.[0]?.text || m.content || '',
+    })),
+    { role: 'user', content: message },
   ];
 
   try {
-    const maxRetries = 1;
+    const maxRetries = 2;
     let attempt = 0;
-    let providerRes;
+    let groqRes;
 
     do {
-      if (CHATBOT_PROVIDER === 'grok') {
-        providerRes = await fetch('https://api.x.ai/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${GROK_API_KEY}`,
-          },
-          body: JSON.stringify({
-            model: 'grok-1',
-            messages: [
-              { role: 'system', content: systemPrompt },
-              ...history.map(item => ({
-                role: item.role === 'user' ? 'user' : 'assistant',
-                content: item.parts?.[0]?.text || ''
-              })),
-              { role: 'user', content: message }
-            ],
-          }),
-        });
-      } else {
-        providerRes = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents }),
-          }
-        );
-      }
+      groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${GROQ_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: 'llama-3.3-70b-versatile',
+          messages,
+          temperature: 0.4,
+          max_tokens: 1024,
+        }),
+      });
 
-      if (providerRes.status === 429 && attempt < maxRetries) {
-        const retryHeader = providerRes.headers.get('retry-after') || providerRes.headers.get('Retry-After');
-        const retryAfterSeconds = Number(retryHeader) || 1;
-        console.warn(`[chat] ${CHATBOT_PROVIDER} rate limited. retryAfter=${retryAfterSeconds}s attempt=${attempt + 1}`);
-        await sleep(retryAfterSeconds * 1000);
+      if (groqRes.status === 429 && attempt < maxRetries - 1) {
+        const retryAfter = groqRes.headers.get('retry-after') || '1';
+        const waitMs = Number(retryAfter) * 1000;
+        console.warn(`[chat] Groq rate limited. Waiting ${waitMs}ms... attempt=${attempt + 1}`);
+        await sleep(waitMs);
       } else {
         break;
       }
 
-      attempt += 1;
-    } while (attempt <= maxRetries);
+      attempt++;
+    } while (attempt < maxRetries);
 
-    if (providerRes.status === 429) {
-      const retryHeader = providerRes.headers.get('retry-after') || providerRes.headers.get('Retry-After');
-      const retryAfterSeconds = Number(retryHeader) || 1;
+    if (groqRes.status === 429) {
+      const retryAfter = groqRes.headers.get('retry-after') || '1';
       return res.status(429).json({
         error: 'rate_limited',
         error_description: 'Too many requests. Please wait a moment and try again.',
-        retry_after_seconds: retryAfterSeconds,
+        retry_after_seconds: Number(retryAfter),
       });
     }
 
-    if (!providerRes.ok) {
-      const errData = await providerRes.json();
-      console.error('[chat] provider error:', errData);
-      return res.status(providerRes.status).json({
+    if (!groqRes.ok) {
+      const err = await groqRes.json().catch(() => ({}));
+      console.error('[chat] Groq error:', err);
+      return res.status(groqRes.status).json({
         error: 'provider_error',
-        error_description: errData?.error?.message || 'Chat provider request failed.'
+        error_description: err?.error?.message || 'Groq API request failed.',
       });
     }
 
-    const data = await providerRes.json();
-    const reply = CHATBOT_PROVIDER === 'grok'
-      ? data?.choices?.[0]?.message?.content || 'Sorry, no response generated.'
-      : data?.candidates?.[0]?.content?.parts?.[0]?.text || 'Sorry, no response generated.';
+    const data = await groqRes.json();
+    const reply = data?.choices?.[0]?.message?.content;
+
+    if (!reply) {
+      return res.status(500).json({
+        error: 'empty_response',
+        error_description: 'No reply received from Groq.'
+      });
+    }
 
     return res.json({ ok: true, reply });
 
@@ -261,7 +240,7 @@ app.post('/chat', async (req, res) => {
     console.error('[chat] Unexpected error:', err);
     return res.status(500).json({
       error: 'server_error',
-      error_description: 'An unexpected error occurred while contacting the chat provider.'
+      error_description: err.message || 'An unexpected error occurred.'
     });
   }
 });

@@ -357,7 +357,7 @@ const Chatbot = () => {
     } catch (err) {
       setMsgs(m => [...m, {
         role: 'bot',
-        text: 'Maafi chahta hoon, abhi jawab dene mein takleef ho rahi hai. Thodi der baad dobara try karein.',
+        text: 'Maafi chahta hoon, abhi jawab dene mein samasya ho rahi hai. Thodi der baad dobara prayas karein.',
         error: err.message,
       }]);
     } finally {
@@ -494,7 +494,7 @@ const Chatbot = () => {
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={handleKey}
-          placeholder={listening ? '🎤 Listening... speak now' : 'Koi bhi farming sawaal poochhen... (Enter to send)'}
+          placeholder={listening ? '🎤 Listening... speak now' : 'Koi bhi Krishi se juda sawaal poochhen... (Enter to send)'}
           rows={1}
           style={{
             flex: 1,
